@@ -1,7 +1,8 @@
-sqlite3
-pandas 
-sklearn
+streamlit
+pandas
 numpy
 matplotlib
 seaborn
 joblib
+scikit-learn
+xgboost
