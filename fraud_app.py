@@ -156,16 +156,25 @@ div[data-testid="stPopover"] .stButton > button {
 }
 
 /* Horizontal navigation buttons (scoped to Navigation) */
+div[role="radiogroup"][aria-label="Navigation"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    column-gap: 20px !important;
+    overflow-x: auto !important;
+    white-space: nowrap !important;
+}
+
 div[role="radiogroup"][aria-label="Navigation"] label {
-    font-size: 140px !important;    /* increase font size */
-    font-weight: 700 !important;    /* slightly bolder */
-    color: #0b3d91 !important;      /* dark blue */
-    cursor: pointer;                /* hand icon */
-    padding: 12px 20px !important;  /* increase clickable area */
-    min-height: 90px !important;    /* taller click target */
+    font-size: 30px !important;
+    font-weight: 700 !important;
+    color: #0b3d91 !important;
+    cursor: pointer;
+    padding: 10px 16px !important;
+    min-height: 44px !important;
     display: inline-flex !important;
     align-items: center !important;
-    margin-right: 100px !important;
+    white-space: nowrap !important;
 }
 
 /* Streamlit 1.53.0: actual text is inside nested elements */
@@ -230,21 +239,47 @@ BANK_NAME = "ABC National Bank"
 MODEL_PATH = "fraud_xgb_pipeline.pkl"
 TRANSACTION_CSV = "transactions.csv"
 AUDIT_CSV = "fraud_audit_log.csv"
+PENDING_CSV = "pending_transactions.csv"
 
 model = joblib.load(MODEL_PATH)
 
 # ================= BANKERS =================
-BANKERS = {
-    "B001": {"name": "Josam", "password": "admin123", "role": "Fraud Analyst"},
-    "B002": {"name": "Alex", "password": "bank123", "role": "Senior Officer"},
-}
+BANKERS_CSV = "bankers.csv"
+
+def load_bankers():
+    if os.path.exists(BANKERS_CSV):
+        try:
+            df = pd.read_csv(BANKERS_CSV, dtype=str).fillna("")
+            return {
+                row["emp_id"]: {
+                    "name": row["name"],
+                    "password": row["password"],
+                    "role": row["role"],
+                }
+                for _, row in df.iterrows()
+                if row.get("emp_id")
+            }
+        except Exception:
+            pass
+    return {
+        "B001": {"name": "Josam", "password": "admin123", "role": "Fraud Analyst"},
+        "B002": {"name": "Alex", "password": "bank123", "role": "Senior Officer"},
+    }
+
+def save_bankers(bankers):
+    df = pd.DataFrame(
+        [{"emp_id": emp_id, **info} for emp_id, info in bankers.items()]
+    )
+    df.to_csv(BANKERS_CSV, index=False)
+
+BANKERS = load_bankers()
 
 # ================= SESSION =================
-for k in ["logged_in","emp_id","emp_name","role"]:
+for k in ["logged_in","emp_id","emp_name","role","generated_txn_ids"]:
     if k not in st.session_state:
-        st.session_state[k] = ""
+        st.session_state[k] = "" if k != "generated_txn_ids" else set()
 
-# ================= HEADER =================
+
 
 # ================= HEADER =================
 
@@ -368,6 +403,7 @@ with c2:
                     st.rerun()
                 else:
                     st.error("Invalid credentials")
+
         st.markdown('</div>', unsafe_allow_html=True)
     else:
         # Show logged-in employee info
@@ -402,7 +438,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ================= NAV =================
-nav_options = ["📊 Dashboard","🛡 Fraud Detection","🚨 Review Fraud","📝 Audit Logs"]
+nav_options = ["📊 Dashboard","🛡 Fraud Detection","🚨 Review Fraud","📝 Audit Logs","👥 Manage Employees"]
 
 if "nav_page" not in st.session_state:
     st.session_state.nav_page = "🚨 Review Fraud"
@@ -426,6 +462,8 @@ elif page == "🚨 Review Fraud":
     page_subtitle = "Review Pending Fraud Transactions"
 elif page == "📝 Audit Logs":
     page_subtitle = "Audit Logs Overview"
+elif page == "👥 Manage Employees":
+    page_subtitle = "Employee Management"
 
 # ================= CENTERED SUBTITLE =================
 st.markdown(f"""
@@ -444,11 +482,16 @@ if not st.session_state.logged_in:
 
 # ================= CSV =================
 TRANSACTION_COLUMNS=["txn_id","transaction_type","amount","fraud_score","final_decision","checked_by","timestamp"]
+PENDING_COLUMNS=["txn_id","transaction_type","amount","fraud_score","final_decision","checked_by","timestamp"]
 AUDIT_COLUMNS=["txn_id","banker_id","banker_name","role","action","remarks","action_time"]
 
 def log_transaction(d):
     pd.DataFrame([[d[c] for c in TRANSACTION_COLUMNS]],columns=TRANSACTION_COLUMNS)\
         .to_csv(TRANSACTION_CSV,mode="a",header=not os.path.exists(TRANSACTION_CSV),index=False)
+
+def log_pending(d):
+    pd.DataFrame([[d[c] for c in PENDING_COLUMNS]],columns=PENDING_COLUMNS)\
+        .to_csv(PENDING_CSV,mode="a",header=not os.path.exists(PENDING_CSV),index=False)
 
 def log_audit(d):
     pd.DataFrame([[d[c] for c in AUDIT_COLUMNS]],columns=AUDIT_COLUMNS)\
@@ -522,9 +565,36 @@ def fraud_detection():
 
     st.success(f"{decision} — Fraud Score {fraud_prob*100:.2f}%")
 
-    tid = str(uuid.uuid4())[:8]
+    # Generate a bank-style transaction id: ABC + YYYYMMDD + '-' + 6-digit sequence
+    def generate_txn_id():
+        existing_ids = set()
+        max_seq = 0
+        date_part = datetime.now().strftime("%Y%m%d")
+        if os.path.exists(TRANSACTION_CSV):
+            try:
+                existing_ids = set(
+                    pd.read_csv(TRANSACTION_CSV, usecols=["txn_id"], dtype=str)["txn_id"]
+                    .dropna()
+                    .astype(str)
+                )
+                prefix = f"ABC{date_part}-"
+                for tid in existing_ids:
+                    if isinstance(tid, str) and tid.startswith(prefix) and len(tid) >= len(prefix) + 6:
+                        seq_part = tid[len(prefix):len(prefix) + 6]
+                        if seq_part.isdigit():
+                            max_seq = max(max_seq, int(seq_part))
+            except Exception:
+                existing_ids = set()
+        while True:
+            max_seq += 1
+            candidate = f"ABC{date_part}-{max_seq:06d}"
+            if candidate not in existing_ids and candidate not in st.session_state.generated_txn_ids:
+                st.session_state.generated_txn_ids.add(candidate)
+                return candidate
 
-    log_transaction({
+    tid = generate_txn_id()
+
+    log_pending({
         "txn_id":tid,
         "transaction_type":txn_type,
         "amount":amount,
@@ -540,11 +610,11 @@ def review_transactions():
 
     st.subheader("🚨 Review Fraud")
 
-    if not os.path.exists(TRANSACTION_CSV):
+    if not os.path.exists(PENDING_CSV):
         st.info("No data")
         return
 
-    df = pd.read_csv(TRANSACTION_CSV)
+    df = pd.read_csv(PENDING_CSV, dtype=str)
 
     flagged = df[df["final_decision"].str.contains("REVIEW|BLOCKED")]
 
@@ -552,11 +622,26 @@ def review_transactions():
         st.success("No pending cases")
         return
 
-    txn = st.selectbox("Transaction ID",flagged["txn_id"])
+    # Auto-select oldest pending transaction (no dropdown)
+    flagged = flagged.reset_index(drop=True)
+    txn = flagged.loc[0, "txn_id"]
+    st.text_input("Transaction ID", txn, disabled=True)
+
+    # Display transaction summary
+    st.caption(
+        f"Type: {flagged.loc[0, 'transaction_type']} | "
+        f"Amount: {flagged.loc[0, 'amount']} | "
+        f"Fraud Score: {flagged.loc[0, 'fraud_score']} | "
+        f"Decision: {flagged.loc[0, 'final_decision']}"
+    )
     action = st.radio("Action",["Confirm Fraud","Mark Legit","Escalate"])
     remarks = st.text_area("Remarks")
 
     if st.button("Submit"):
+        # Save reviewed record to final transactions log
+        reviewed_row = flagged.loc[0].to_dict()
+        log_transaction(reviewed_row)
+
         log_audit({
             "txn_id":txn,
             "banker_id":st.session_state.emp_id,
@@ -566,6 +651,15 @@ def review_transactions():
             "remarks":remarks,
             "action_time":datetime.now().isoformat()
         })
+        # Remove reviewed transaction from pending
+        remaining = df[df["txn_id"] != txn]
+        if remaining.empty:
+            try:
+                os.remove(PENDING_CSV)
+            except Exception:
+                remaining.to_csv(PENDING_CSV, index=False)
+        else:
+            remaining.to_csv(PENDING_CSV, index=False)
         st.success("Recorded")
 
 
@@ -578,9 +672,83 @@ def audit_logs():
     else:	
         st.info("No audit logs")
 
+def manage_employees():
+
+    st.subheader("👥 Manage Employees")
+
+    # Only Senior Officer can manage employees
+    if st.session_state.role != "Senior Officer":
+        st.error("Access denied: Senior Officer only")
+        return
+
+    # Require password re-entry to manage employees
+    if "admin_unlock" not in st.session_state:
+        st.session_state.admin_unlock = False
+
+    if not st.session_state.admin_unlock:
+        st.info("Re-enter your password to manage employees")
+        unlock_pwd = st.text_input("Password", type="password", key="unlock_pwd")
+        if st.button("Unlock", key="unlock_btn"):
+            if (
+                st.session_state.emp_id in BANKERS
+                and BANKERS[st.session_state.emp_id]["password"] == unlock_pwd
+            ):
+                st.session_state.admin_unlock = True
+                st.success("Access granted")
+                st.rerun()
+            else:
+                st.error("Incorrect password")
+        return
+
+    st.markdown("**Current Employees**")
+    df = pd.DataFrame(
+        [
+            {"emp_id": emp_id, "name": info["name"], "role": info["role"]}
+            for emp_id, info in BANKERS.items()
+        ]
+    )
+    st.dataframe(df, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("**Add Employee**")
+    add_name = st.text_input("Name", key="add_name")
+    add_id = st.text_input("Employee ID", key="add_id")
+    add_role = st.text_input("Role", key="add_role")
+    add_pwd = st.text_input("Password", type="password", key="add_pwd")
+
+    if st.button("Add Employee", key="add_emp_btn"):
+        if not add_name or not add_id or not add_role or not add_pwd:
+            st.error("All fields are required")
+        elif add_id in BANKERS:
+            st.error("Employee ID already exists")
+        else:
+            BANKERS[add_id] = {
+                "name": add_name,
+                "password": add_pwd,
+                "role": add_role,
+            }
+            save_bankers(BANKERS)
+            st.success("Employee added")
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("**Remove Employee**")
+    remove_id = st.text_input("Employee ID to remove", key="remove_id")
+    if st.button("Remove Employee", key="remove_emp_btn"):
+        if not remove_id:
+            st.error("Employee ID is required")
+        elif remove_id not in BANKERS:
+            st.error("Employee ID not found")
+        else:
+            del BANKERS[remove_id]
+            save_bankers(BANKERS)
+            st.success("Employee removed")
+            st.rerun()
+
 # ================= ROUTER =================
 if page=="📊 Dashboard": dashboard()
 elif page=="🛡 Fraud Detection": fraud_detection()
 elif page=="🚨 Review Fraud": review_transactions()
 elif page=="📝 Audit Logs": audit_logs()
+elif page=="👥 Manage Employees": manage_employees()
 
