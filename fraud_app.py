@@ -389,10 +389,10 @@ with c2:
         st.markdown('<div class="login-popover-wrap">', unsafe_allow_html=True)
         with st.popover("🔐 Login"):
             st.markdown('<div class="login-label">Employee ID</div>', unsafe_allow_html=True)
-            emp = st.text_input("", key="login_emp_id", label_visibility="collapsed")
+            emp = st.text_input("Employee ID", key="login_emp_id", label_visibility="collapsed")
 
             st.markdown('<div class="login-label">Password</div>', unsafe_allow_html=True)
-            pwd = st.text_input("", type="password", key="login_pwd", label_visibility="collapsed")
+            pwd = st.text_input("Password", type="password", key="login_pwd", label_visibility="collapsed")
 
             if st.button("Login", key="login_btn"):
                 if emp in BANKERS and BANKERS[emp]["password"] == pwd:
@@ -751,4 +751,3 @@ elif page=="🛡 Fraud Detection": fraud_detection()
 elif page=="🚨 Review Fraud": review_transactions()
 elif page=="📝 Audit Logs": audit_logs()
 elif page=="👥 Manage Employees": manage_employees()
-
